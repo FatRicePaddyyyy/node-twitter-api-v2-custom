@@ -341,14 +341,9 @@ export default class TwitterApiv1ReadWrite extends TwitterApiv1ReadOnly {
    *
    * @param returnFullMediaData If set to true, returns the whole media information instead of just the media_id
    */
-  public async uploadMedia(file: TUploadableMedia, options: Partial<UploadMediaV1Params>, returnFullMediaData: true): Promise<MediaStatusV1Result>;
-  public async uploadMedia(file: TUploadableMedia, options?: Partial<UploadMediaV1Params>): Promise<string>;
   public async uploadMedia(file: TUploadableMedia, options: Partial<UploadMediaV1Params> = {}, returnFullMediaData = false) {
-    const chunkLength = options.chunkLength ?? (1024 * 1024);
-
     const { fileHandle, mediaCategory, fileSize, mimeType } = await this.getUploadMediaRequirements(file, options);
 
-    // Get the file handle (if not buffer)
     try {
       // Finally! We can send INIT message.
       const mediaData = await this.post<InitMediaV1Result>(
@@ -365,7 +360,7 @@ export default class TwitterApiv1ReadWrite extends TwitterApiv1ReadOnly {
       );
 
       // Upload the media chunk by chunk
-      await this.mediaChunkedUpload(fileHandle, chunkLength, mediaData.media_id_string, options.maxConcurrentUploads);
+      await this.mediaChunkedUpload(fileHandle, options.chunkLength ?? (1024 * 1024), mediaData.media_id_string, options.maxConcurrentUploads);
 
       // Finalize media
       const fullMediaData = await this.post<MediaStatusV1Result>(
@@ -389,14 +384,7 @@ export default class TwitterApiv1ReadWrite extends TwitterApiv1ReadOnly {
         return fullMediaData.media_id_string;
       }
     } finally {
-      // Close file if any
-      if (typeof file === 'number') {
-        // eslint-disable-next-line @typescript-eslint/no-empty-function
-        fs.close(file, () => {});
-      }
-      else if (typeof fileHandle! === 'object' && !(fileHandle instanceof Buffer)) {
-        fileHandle.close();
-      }
+      await this.closeFileHandle(file, fileHandle);
     }
   }
 
@@ -433,7 +421,6 @@ export default class TwitterApiv1ReadWrite extends TwitterApiv1ReadOnly {
   }
 
   protected async getUploadMediaRequirements(file: TUploadableMedia, { mimeType, type, target, longVideo }: Partial<UploadMediaV1Params> = {}) {
-    // Get the file handle (if not buffer)
     let fileHandle: TFileHandle;
 
     try {
@@ -459,15 +446,7 @@ export default class TwitterApiv1ReadWrite extends TwitterApiv1ReadOnly {
         mimeType: realMimeType,
       };
     } catch (e) {
-      // Close file if any
-      if (typeof file === 'number') {
-        // eslint-disable-next-line @typescript-eslint/no-empty-function
-        fs.close(file, () => {});
-      }
-      else if (typeof fileHandle! === 'object' && !(fileHandle instanceof Buffer)) {
-        fileHandle.close();
-      }
-
+      await this.closeFileHandle(file, fileHandle!);
       throw e;
     }
   }
@@ -535,5 +514,22 @@ export default class TwitterApiv1ReadWrite extends TwitterApiv1ReadOnly {
     }
 
     await Promise.all([...currentUploads]);
+  }
+
+  protected async closeFileHandle(file: TUploadableMedia, fileHandle: TFileHandle) {
+    if (typeof file === 'number') {
+      // eslint-disable-next-line @typescript-eslint/no-empty-function
+      fs.close(file, () => {});
+    }
+    else if (typeof fileHandle === 'object' && !(fileHandle instanceof Buffer)) {
+      // Deno対応: closeメソッドの存在確認をしてから実行
+      if (fileHandle && typeof fileHandle.close === 'function') {
+        try {
+          fileHandle.close();
+        } catch (e) {
+          console.warn('Failed to close file handle:', e);
+        }
+      }
+    }
   }
 }
